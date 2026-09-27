@@ -2,6 +2,18 @@
 
 Controle o volume de cada aba do Firefox de forma independente — e amplifique além do limite padrão, chegando até **600%**.
 
+## Teste local da versão 1.1.0
+
+Use `E:\extensão\volumemax\manifest.json` em **about:debugging → Este Firefox → Carregar extensão temporária**. Se já carregou esta pasta, clique em **Recarregar** na extensão. Depois recarregue as páginas dos vídeos.
+
+Desative a outra versão `VolumeMax-Firefox` e outros amplificadores durante o teste: dois processadores podem disputar o mesmo elemento de áudio. A pasta de trabalho desta versão é `volumemax`; não é necessário ZIP nem envio à loja.
+
+Mudanças: execução em frames e shadow roots abertos; reaplicação do volume em novas páginas/frames; estado por aba durante a sessão do navegador; reativação do AudioContext ao interagir com a página; até três tentativas de conexão; avisos de conexão, ausência de player e contexto suspenso; correção do botão silenciar/restaurar e do slider da lista de abas.
+
+Foi preservada a conexão direta `createMediaElementSource → GainNode`, sem bloquear Netflix ou elementos com chaves DRM. Isso conserva a abordagem da versão que você testou; a reprodução real na Netflix e em outros serviços ainda precisa de teste manual. Os quatro testes em `node tests/volumemax-legacy.test.cjs` (na pasta pai) usam APIs simuladas e não comprovam compatibilidade de áudio com serviços reais.
+
+Limitações: mídias sem autorização CORS podem ficar silenciosas após conexão ao Web Audio; players que já possuem um processador podem rejeitar outra conexão; shadow roots fechados e páginas restritas não são acessíveis. Esses limites não são resolvidos apenas pelo suporte a frames. O aviso de conexão bem-sucedida não comprova que o áudio esteja audível. Se um site ficar sem som, desative a extensão e recarregue a página.
+
 ---
 
 ## ✨ Funcionalidades
@@ -64,7 +76,7 @@ volume-master-firefox/
 
 ## 🧠 Como funciona
 
-A extensão usa a **Web Audio API** do navegador. Ao ajustar o volume de uma aba, um `GainNode` é criado e conectado a todos os elementos de áudio e vídeo da página. Isso permite amplificar o som além do limite de 100% que o sistema operacional impõe.
+A extensão usa a **Web Audio API** do navegador. Ao detectar um player, conecta o elemento a um `GainNode`; o controle altera o ganho entre 0 e 6. Isso amplifica o sinal em relação ao volume original do player, sem alterar o volume do sistema operacional.
 
 ---
 

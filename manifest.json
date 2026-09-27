@@ -1,12 +1,13 @@
 {
   "manifest_version": 2,
   "name": "VolumeMax",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Control the volume of each tab individually. Amplify up to 600%!",
   "permissions": [
     "activeTab",
     "tabs",
-    "storage"
+    "storage",
+    "<all_urls>"
   ],
   "browser_action": {
     "default_popup": "popup.html",
@@ -16,12 +17,14 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "background": {
     "scripts": ["background.js"],
-    "persistent": false
+    "persistent": true
   },
   "icons": {
     "48": "icon.svg",

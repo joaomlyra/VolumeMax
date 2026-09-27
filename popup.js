@@ -2,6 +2,15 @@
 
 let currentTabId = null;
 let tabVolumes = {};
+const lastAudible = {};
+const statusEl = document.getElementById('status');
+function showStatus(state) {
+  statusEl.textContent = !state.frames ? 'Sem acesso ao player. Recarregue a página; páginas internas do Firefox são restritas.'
+    : !state.media ? 'Nenhum player detectado. Inicie a reprodução.'
+    : state.failed ? `${state.failed} player(s) não puderam ser conectados. Outro amplificador pode estar usando o áudio.`
+    : state.suspended ? 'Clique na página para ativar o áudio.'
+    : `${state.media} player(s) conectado(s). Se não houver efeito, o site pode restringir o processamento de áudio.`;
+}
 
 const slider = document.getElementById('volumeSlider');
 const percentDisplay = document.getElementById('percentDisplay');
@@ -107,19 +116,14 @@ function updateSliderGradient(percent) {
   slider.style.background = 'linear-gradient(to right, ' + color + ' 0%, ' + color + ' ' + pct + '%, #2a2a4a ' + pct + '%, #2a2a4a 100%)';
 }
 
-function saveAndApply(tabId, percent) {
-  const key = 'vol_' + tabId;
-  const obj = {};
-  obj[key] = percent;
-  browser.storage.local.set(obj);
-  browser.tabs.sendMessage(tabId, { type: 'SET_VOLUME', volume: percent / 100 })
-    .catch(() => {
-      browser.tabs.executeScript(tabId, { file: 'content.js' }).then(() => {
-        setTimeout(() => {
-          browser.tabs.sendMessage(tabId, { type: 'SET_VOLUME', volume: percent / 100 }).catch(() => {});
-        }, 200);
-      }).catch(() => {});
-    });
+async function saveAndApply(tabId, percent) {
+  if (percent > 0) lastAudible[tabId] = percent;
+  try {
+    const state = await browser.runtime.sendMessage({type: 'VM_SET', tabId, percent});
+    if (tabId === currentTabId) showStatus(state);
+  } catch (_) {
+    statusEl.textContent = 'Não foi possível aplicar o volume. Recarregue a extensão e a página.';
+  }
 }
 
 slider.addEventListener('input', () => { setVolume(parseInt(slider.value)); });
@@ -136,7 +140,8 @@ function updatePresetHighlight(percent) {
 
 muteBtn.addEventListener('click', () => {
   const cur = parseInt(slider.value);
-  setVolume(cur === 0 ? (tabVolumes[currentTabId] > 0 ? tabVolumes[currentTabId] : 100) : 0);
+  if (cur > 0) lastAudible[currentTabId] = cur;
+  setVolume(cur === 0 ? (lastAudible[currentTabId] || 100) : 0);
 });
 
 resetBtn.addEventListener('click', () => { setVolume(100); });
@@ -218,7 +223,7 @@ function buildTabList(tabs) {
 function updateTabListBadge(tabId, vol) {
   const badge = document.getElementById('badge-' + tabId);
   if (badge) badge.textContent = vol + '%';
-  const mini = tabList.querySelector('[data-tab-id="' + tabId + '"]');
+  const mini = tabList.querySelector('input[data-tab-id="' + tabId + '"]');
   if (mini) mini.value = vol;
 }
 
@@ -231,15 +236,19 @@ async function init() {
   tabTitleEl.textContent = title;
 
   const allTabs = await browser.tabs.query({ currentWindow: true });
-  const keys = allTabs.map(t => 'vol_' + t.id);
-  const stored = await browser.storage.local.get(keys);
-
-  allTabs.forEach(t => {
-    tabVolumes[t.id] = stored['vol_' + t.id] ?? 100;
-  });
+  await Promise.all(allTabs.map(async t => {
+    const state = await browser.runtime.sendMessage({type: 'VM_GET', tabId: t.id});
+    tabVolumes[t.id] = state.percent;
+    if (state.percent > 0) lastAudible[t.id] = state.percent;
+    if (t.id === currentTabId) showStatus(state);
+  }));
 
   setVolume(tabVolumes[currentTabId], false);
   buildTabList(allTabs);
+  setInterval(async () => {
+    try { showStatus(await browser.runtime.sendMessage({type: 'VM_GET', tabId: currentTabId})); }
+    catch (_) { statusEl.textContent = 'A extensão foi desconectada. Abra o painel novamente.'; }
+  }, 1000);
 }
 
-init();
+init().catch(() => { statusEl.textContent = 'Não foi possível carregar as abas. Abra a extensão novamente.'; });

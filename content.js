@@ -1,65 +1,81 @@
-// content.js — injected into every page to control audio via Web Audio API
-
-(function () {
+(() => {
   if (window.__volumeMaxInitialized) return;
   window.__volumeMaxInitialized = true;
-
-  let audioCtx = null;
-  let gainNode = null;
-  let currentVolume = 1.0;
-  const processedNodes = new WeakSet();
-
-  function getAudioContext() {
-    if (!audioCtx || audioCtx.state === 'closed') {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      gainNode = audioCtx.createGain();
-      gainNode.gain.value = currentVolume;
-      gainNode.connect(audioCtx.destination);
-    }
-    return { audioCtx, gainNode };
-  }
-
-  function connectMediaElement(el) {
-    if (processedNodes.has(el)) return;
-    processedNodes.add(el);
+  let audioCtx, gainNode, currentVolume = 1;
+  const states = new WeakMap();
+  const media = new Set();
+  const roots = new WeakSet();
+  const port = browser.runtime.connect({name: 'volumemax-media'});
+  function report() {
+    const active = [...media].filter(el => el.isConnected);
     try {
-      const { audioCtx, gainNode } = getAudioContext();
+      port.postMessage({media: active.length,
+        failed: active.filter(el => states.get(el).error).length,
+        suspended: Boolean(active.length && audioCtx?.state === 'suspended')});
+    } catch (_) { /* Reload the page after updating the extension. */ }
+  }
+  function resume() {
+    if (audioCtx?.state === 'suspended') audioCtx.resume().then(report).catch(report);
+  }
+  function connect(el) {
+    media.add(el);
+    let state = states.get(el);
+    if (!state) {
+      state = {source: null, error: false, attempts: 0};
+      states.set(el, state);
+      for (const event of ['loadedmetadata', 'canplay', 'play']) {
+        el.addEventListener(event, () => { connect(el); resume(); report(); });
+      }
+    }
+    if (state.source || state.attempts >= 3) return;
+    state.attempts++;
+    try {
+      if (!audioCtx) {
+        audioCtx = new window.AudioContext();
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = currentVolume;
+        gainNode.connect(audioCtx.destination);
+        audioCtx.onstatechange = report;
+      }
+      // Preserve the original method, including Netflix: no domain/DRM ban.
       const source = audioCtx.createMediaElementSource(el);
       source.connect(gainNode);
-    } catch (e) {
-      // Element may already be connected elsewhere — ignore
+      state.source = source;
+      state.error = false;
+    } catch (error) {
+      state.error = true;
+      console.warn('VolumeMax: não foi possível conectar o player.', error.name);
     }
   }
-
-  function processAllMedia() {
-    document.querySelectorAll('audio, video').forEach(connectMediaElement);
+  function scan(root) {
+    if (root.matches?.('audio,video')) connect(root);
+    root.querySelectorAll?.('audio,video').forEach(connect);
+    if (root.shadowRoot) observe(root.shadowRoot);
+    root.querySelectorAll?.('*').forEach(el => { if (el.shadowRoot) observe(el.shadowRoot); });
   }
-
-  function setVolume(volume) {
-    currentVolume = volume;
-    if (gainNode) {
-      gainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.01);
-    }
-    processAllMedia();
+  function observe(root) {
+    if (roots.has(root)) return;
+    roots.add(root);
+    scan(root);
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) if (node.nodeType === 1) scan(node);
+      report();
+    }).observe(root, {childList: true, subtree: true});
   }
-
-  // Watch for new media elements added dynamically
-  const observer = new MutationObserver(() => processAllMedia());
-  observer.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true
+  port.onMessage.addListener(msg => {
+    if (!Number.isFinite(msg.volume)) return;
+    currentVolume = Math.max(0, Math.min(6, msg.volume));
+    if (gainNode) gainNode.gain.setTargetAtTime(currentVolume, audioCtx.currentTime, .01);
+    scan(document);
+    resume();
+    report();
   });
-
-  processAllMedia();
-
-  // Listen for messages from popup
-  browser.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'SET_VOLUME') {
-      setVolume(msg.volume);
-      return Promise.resolve({ ok: true });
-    }
-    if (msg.type === 'GET_VOLUME') {
-      return Promise.resolve({ volume: currentVolume });
-    }
-  });
+  for (const event of ['pointerdown', 'keydown']) document.addEventListener(event, resume, true);
+  observe(document);
+  setInterval(() => {
+    for (const el of media) if (!el.isConnected) media.delete(el);
+    scan(document);
+    report();
+  }, 2000);
+  report();
 })();
